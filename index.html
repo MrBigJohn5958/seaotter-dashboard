@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Project Sea Otter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #05070b;
+      --panel: #0b1018;
+      --line: rgba(186, 214, 235, 0.10);
+      --cyan: #8ee7ff;
+      --ice: #e7eef6;
+      --muted: #8b97a6;
+      --green: #3ee6a0;
+      --amber: #e6b85c;
+      --red: #ff6b7d;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--ice);
+      font-family: "IBM Plex Sans", sans-serif;
+      font-feature-settings: "ss01", "tnum";
+    }
+    .num {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+    }
+    .hero {
+      min-height: 100vh;
+      position: relative;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, #05070b 0%, rgba(5,7,11,0.82) 36%, rgba(5,7,11,0.18) 62%, rgba(5,7,11,0.35) 100%),
+        url("/sea_otter_header.jpg") right 8% center / auto 108% no-repeat,
+        #05070b;
+    }
+    .hero-copy { position: relative; z-index: 2; padding: 0 8vw; max-width: 780px; }
+    .kicker { color: var(--cyan); font-size: 12px; font-weight: 500; letter-spacing: 0.34em; text-transform: uppercase; }
+    .hero h1 {
+      font-family: Syne, sans-serif;
+      font-size: clamp(44px, 7vw, 88px);
+      font-weight: 800;
+      letter-spacing: -0.06em;
+      line-height: 0.92;
+      margin: 18px 0 14px;
+    }
+    .hero h2 { font-size: 13px; font-weight: 500; letter-spacing: 0.42em; color: rgba(231,238,246,0.62); }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 36px; }
+    .pill { border: 1px solid var(--line); background: rgba(8,12,20,0.55); color: var(--muted); font-size: 11px; letter-spacing: 0.08em; padding: 7px 11px; }
+    .pill b { color: var(--green); font-weight: 500; margin-right: 6px; }
+    .scroll { position: absolute; left: 8vw; bottom: 36px; z-index: 2; color: var(--muted); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; text-decoration: none; }
+    .scroll::after { content: ""; display: block; width: 1px; height: 28px; margin-top: 8px; background: linear-gradient(var(--cyan), transparent); }
+    .book { max-width: 1080px; margin: 0 auto; padding: 72px 28px 80px; }
+    .clockline { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 28px; color: var(--muted); font-size: 12px; letter-spacing: 0.06em; }
+    .clockline .num { color: var(--ice); font-size: 13px; }
+    .metrics { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; margin-bottom: 40px; }
+    .card { background: var(--panel); border: 1px solid var(--line); padding: 20px 22px 18px; }
+    .lbl { color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; }
+    .big { margin-top: 10px; font-size: 34px; line-height: 1; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .split .big { font-size: 20px; margin-top: 6px; }
+    .bar { display: flex; height: 2px; margin-top: 14px; background: rgba(255,255,255,0.06); }
+    .bar i:first-child { width: 59%; background: var(--cyan); }
+    .bar i:last-child { width: 41%; background: var(--green); }
+    .up { color: var(--green); }
+    .down { color: var(--red); }
+    .block-title { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 12px; }
+    .block-title h3 { font-size: 12px; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; padding: 0 12px 10px; border-bottom: 1px solid var(--line); }
+    td { padding: 16px 12px; border-bottom: 1px solid var(--line); font-size: 14px; vertical-align: middle; }
+    td.num, th.num { text-align: right; }
+    .city { font-weight: 600; letter-spacing: 0.04em; }
+    .city span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+    .pop { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+    .spark { display: flex; align-items: flex-end; gap: 2px; height: 18px; }
+    .spark i { width: 3px; background: var(--cyan); opacity: 0.28; display: block; }
+    .spark i.on { opacity: 1; }
+    .flag { color: var(--green); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+    details { margin-top: 36px; border-top: 1px solid var(--line); }
+    summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; padding: 16px 0; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+    summary::-webkit-details-marker { display: none; }
+    footer { margin-top: 28px; color: var(--muted); font-size: 11px; letter-spacing: 0.08em; }
+    @media (max-width: 800px) {
+      .metrics { grid-template-columns: 1fr; }
+      .hero { background-position: right -40px center; }
+    }
+  </style>
+</head>
+<body>
+  <section class="hero">
+    <div class="hero-copy">
+      <div class="kicker">Live book</div>
+      <h1>Project<br>Sea Otter</h1>
+      <h2>KXRAIN FADE</h2>
+      <div class="hero-meta">
+        <div class="pill"><b>●</b>Local</div>
+        <div class="pill"><b>●</b>GCP</div>
+        <div class="pill">Feeds 12s</div>
+        <div class="pill">Kill off</div>
+      </div>
+    </div>
+    <a class="scroll" href="#book">Book</a>
+  </section>
+  <main class="book" id="book">
+    <div class="clockline">
+      <span id="dateLine"></span>
+      <span class="num" id="clock"></span>
+    </div>
+    <section class="metrics">
+      <article class="card">
+        <div class="lbl">Portfolio</div>
+        <div class="num big" id="mPortfolio">—</div>
+        <div class="bar"><i></i><i></i></div>
+        <div class="split">
+          <div><div class="lbl">Cash</div><div class="num big" id="mCash">—</div></div>
+          <div><div class="lbl">Open mark</div><div class="num big" id="mOpen">—</div></div>
+        </div>
+      </article>
+      <article class="card"><div class="lbl">Week P&L</div><div class="num big" id="mWeek">—</div></article>
+      <article class="card"><div class="lbl">Since seed</div><div class="num big" id="mSeed">—</div></article>
+    </section>
+    <div class="block-title">
+      <h3>Open positions</h3>
+      <span class="lbl" id="openCount">waiting on Kalshi</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>City</th>
+          <th class="num">Entry</th>
+          <th class="num">Mark</th>
+          <th class="num">Size</th>
+          <th class="num">Hourly PoP</th>
+          <th class="num">Metar</th>
+        </tr>
+      </thead>
+      <tbody id="openBody"></tbody>
+    </table>
+    <details>
+      <summary>Historical positions</summary>
+      <p class="lbl" style="padding:12px 0">Fills next. Open book is live.</p>
+    </details>
+    <footer id="foot">Connecting to /api/status…</footer>
+  </main>
+  <script>
+    const fmt = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+    const dayFmt = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",weekday:"long",day:"2-digit",month:"short",year:"numeric"});
+    const tick = () => {
+      document.getElementById("clock").textContent = fmt.format(new Date()) + " ET";
+      document.getElementById("dateLine").textContent = dayFmt.format(new Date());
+    };
+    tick(); setInterval(tick, 1000);
+    const money = (n) => n == null || Number.isNaN(n) ? "—" : Number(n).toFixed(2);
+    const signed = (n) => {
+      if (n == null || Number.isNaN(n)) return { t: "—", cls: "" };
+      const v = Number(n);
+      return { t: (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2), cls: v > 0 ? "up" : v < 0 ? "down" : "" };
+    };
+    async function load() {
+      const foot = document.getElementById("foot");
+      try {
+        const j = await (await fetch("/api/status", { cache: "no-store" })).json();
+        if (!j.live) {
+          foot.textContent = j.error || j.hint || "Add Kalshi env vars on Vercel.";
+          document.getElementById("openCount").textContent = "no live feed";
+          return;
+        }
+        document.getElementById("mPortfolio").textContent = money(j.portfolio);
+        document.getElementById("mCash").textContent = money(j.cash);
+        document.getElementById("mOpen").textContent = money(j.openMark);
+        const w = signed(j.weekPnl);
+        const s = signed(j.sinceSeed);
+        const weekEl = document.getElementById("mWeek");
+        weekEl.textContent = w.t; weekEl.className = "num big " + w.cls;
+        const seedEl = document.getElementById("mSeed");
+        seedEl.textContent = s.t; seedEl.className = "num big " + s.cls;
+        document.getElementById("openCount").textContent = (j.open || []).length + " live";
+        document.getElementById("openBody").innerHTML = (j.open || []).map((p) => {
+          const spark = (p.popHourly || []).slice(0, 12).map((v, i, a) => {
+            const on = i >= a.length - 2 ? " class=on" : "";
+            return `<i style="height:${Math.max(8, Math.min(100, v))}%"${on}></i>`;
+          }).join("");
+          const wet = String(p.metar).toUpperCase() === "WET";
+          return `<tr>
+            <td class="city">${p.city}<span>${p.station || ""} · ${p.side}</span></td>
+            <td class="num">${money(p.entry)}</td>
+            <td class="num">${money(p.mark)}</td>
+            <td class="num">${p.contracts} / ${money(p.cash)}</td>
+            <td class="num"><div class="pop"><span>${p.pop == null ? "—" : p.pop + "%"}</span><span class="spark">${spark}</span></div></td>
+            <td class="num flag" style="${wet ? "color:var(--red)" : ""}">${wet ? "Wet" : "Dry"}</td>
+          </tr>`;
+        }).join("") || `<tr><td colspan="6">No open KXRAIN.</td></tr>`;
+        foot.textContent = "Live Kalshi + NWS + METAR. Seed " + (j.seed || 20) + ".";
+      } catch (e) {
+        foot.textContent = "Status fetch failed: " + e;
+      }
+    }
+    load();
+    setInterval(load, 12000);
+  </script>
+</body>
+</html>
