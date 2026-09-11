@@ -41,7 +41,7 @@
       overflow: hidden;
       background:
         linear-gradient(90deg, #05070b 0%, rgba(5,7,11,0.82) 36%, rgba(5,7,11,0.18) 62%, rgba(5,7,11,0.35) 100%),
-        url("/sea_otter_header.jpg") right 8% center / auto 108% no-repeat,
+        url("https://cdn.jsdelivr.net/gh/MrBigJohn5958/seaotter-dashboard@4bd7543/sea_otter_header.jpg") right 8% center / auto 108% no-repeat,
         #05070b;
     }
     .hero-copy { position: relative; z-index: 2; padding: 0 8vw; max-width: 780px; }
@@ -87,6 +87,12 @@
     .spark i { width: 3px; background: var(--cyan); opacity: 0.28; display: block; }
     .spark i.on { opacity: 1; }
     .flag { color: var(--green); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+    .verdict { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
+    .verdict.in { color: var(--green); }
+    .verdict.out { color: var(--muted); }
+    .verdict.held { color: var(--cyan); }
+    .verdict.wet { color: var(--red); }
+    .verdict.mute { color: rgba(139,151,166,0.7); }
     details { margin-top: 36px; border-top: 1px solid var(--line); }
     summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; padding: 16px 0; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
     summary::-webkit-details-marker { display: none; }
@@ -151,6 +157,21 @@
       <summary>Historical positions</summary>
       <p class="lbl" style="padding:12px 0">Fills next. Open book is live.</p>
     </details>
+    <details id="lastClock">
+      <summary>Last clock<span id="clockMeta">no tape yet</span></summary>
+      <table>
+        <thead>
+          <tr>
+            <th>City</th>
+            <th class="num">PoP</th>
+            <th class="num">YES</th>
+            <th class="num">NO</th>
+            <th class="num">Verdict</th>
+          </tr>
+        </thead>
+        <tbody id="clockBody"></tbody>
+      </table>
+    </details>
     <footer id="foot">Connecting to /api/status…</footer>
   </main>
   <script>
@@ -206,8 +227,34 @@
         foot.textContent = "Status fetch failed: " + e;
       }
     }
+    async function loadClock() {
+      const meta = document.getElementById("clockMeta");
+      const body = document.getElementById("clockBody");
+      try {
+        const s = await (await fetch("/api/scan", { cache: "no-store" })).json();
+        if (!s.live) {
+          meta.textContent = "no tape yet";
+          body.innerHTML = `<tr><td colspan="5">Waiting on the bot to post a clock. After the next 7:00 / 16:00 pull, or run python -m kxrain push-scan.</td></tr>`;
+          return;
+        }
+        const when = s.clock || "clock";
+        meta.textContent = `${when} · ${s.screened || 0} screened · ${s.entered || 0} entered`;
+        body.innerHTML = (s.cities || []).map((c) => `<tr>
+          <td class="city">${c.city}</td>
+          <td class="num">${c.pop == null ? "—" : Math.round(c.pop) + "%"}</td>
+          <td class="num">${c.yes == null ? "—" : Number(c.yes).toFixed(2)}</td>
+          <td class="num">${c.no == null ? "—" : Number(c.no).toFixed(2)}</td>
+          <td class="num verdict ${c.kind || "mute"}">${c.verdict}</td>
+        </tr>`).join("");
+      } catch (e) {
+        meta.textContent = "scan error";
+        body.innerHTML = `<tr><td colspan="5">${e}</td></tr>`;
+      }
+    }
     load();
+    loadClock();
     setInterval(load, 12000);
+    setInterval(loadClock, 30000);
   </script>
 </body>
 </html>
