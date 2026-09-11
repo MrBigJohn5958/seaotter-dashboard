@@ -92,7 +92,7 @@ module.exports = async function handler(req, res) {
   }
 
   const scan = globalThis.__LAST_SCAN || await loadGithub();
-  if (!scan) {
+  if (!scan || (!scan.clock && !(scan.rows || []).length)) {
     res.status(200).json({ live: false, empty: true });
     return;
   }
