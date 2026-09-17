@@ -1,4 +1,4 @@
-const CITIES = ["NYC","EWR","TTN","PHIL","DC","BOS","ATL","MIA","NOLA","CHI","MIN","DEN","OKC","DAL","AUS","SATX","HOU","PHX","LV","LAX","SFO","SEA"];
+const CITIES = ["NYC","PHIL","DC","BOS","MIA","CHI","MIN","NOLA","DEN","OKC","DAL","AUS","SATX","HOU","PHX","LV","LAX","SEA"];
 
 function verdict(row) {
   if (!row) return { code: "NO MKT", kind: "mute" };
