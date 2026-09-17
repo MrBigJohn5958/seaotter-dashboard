@@ -94,8 +94,9 @@
     .verdict.wet { color: var(--red); }
     .verdict.mute { color: rgba(139,151,166,0.7); }
     details { margin-top: 36px; border-top: 1px solid var(--line); }
-    summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; padding: 16px 0; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+    summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 16px; padding: 16px 0; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
     summary::-webkit-details-marker { display: none; }
+    #clockMeta { letter-spacing: 0.06em; text-transform: none; color: var(--ice); font-family: "IBM Plex Mono", monospace; font-size: 12px; }
     footer { margin-top: 28px; color: var(--muted); font-size: 11px; letter-spacing: 0.08em; }
     @media (max-width: 800px) {
       .metrics { grid-template-columns: 1fr; }
@@ -153,11 +154,23 @@
       </thead>
       <tbody id="openBody"></tbody>
     </table>
-    <details>
-      <summary>Historical positions</summary>
-      <p class="lbl" style="padding:12px 0">Fills next. Open book is live.</p>
+    <details id="histBox" open>
+      <summary>Historical positions<span id="histMeta">no closed tape yet</span></summary>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>City</th>
+            <th>Ticker</th>
+            <th class="num">Realized</th>
+            <th class="num">Fees</th>
+            <th class="num">Traded</th>
+          </tr>
+        </thead>
+        <tbody id="histBody"></tbody>
+      </table>
     </details>
-    <details id="lastClock">
+    <details id="lastClock" open>
       <summary>Last clock<span id="clockMeta">no tape yet</span></summary>
       <table>
         <thead>
@@ -177,6 +190,7 @@
   <script>
     const fmt = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
     const dayFmt = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",weekday:"long",day:"2-digit",month:"short",year:"numeric"});
+    const stampFmt = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",weekday:"short",day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:false});
     const tick = () => {
       document.getElementById("clock").textContent = fmt.format(new Date()) + " ET";
       document.getElementById("dateLine").textContent = dayFmt.format(new Date());
@@ -187,6 +201,12 @@
       if (n == null || Number.isNaN(n)) return { t: "—", cls: "" };
       const v = Number(n);
       return { t: (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2), cls: v > 0 ? "up" : v < 0 ? "down" : "" };
+    };
+    const etStamp = (iso) => {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso);
+      return stampFmt.format(d) + " ET";
     };
     async function load() {
       const foot = document.getElementById("foot");
@@ -222,6 +242,19 @@
             <td class="num flag" style="${wet ? "color:var(--red)" : ""}">${wet ? "Wet" : "Dry"}</td>
           </tr>`;
         }).join("") || `<tr><td colspan="6">No open KXRAIN.</td></tr>`;
+        const hist = j.history || [];
+        document.getElementById("histMeta").textContent = hist.length ? hist.length + " closed" : "no closed tape yet";
+        document.getElementById("histBody").innerHTML = hist.length ? hist.map((h) => {
+          const pnl = signed(h.realized);
+          return `<tr>
+            <td class="num">${h.date || etStamp(h.settledAt) || "—"}</td>
+            <td class="city">${h.city}<span>${h.name || ""}</span></td>
+            <td>${h.ticker || ""}</td>
+            <td class="num ${pnl.cls}">${pnl.t}</td>
+            <td class="num">${money(h.fees)}</td>
+            <td class="num">${money(h.traded)}</td>
+          </tr>`;
+        }).join("") : `<tr><td colspan="6">No settled KXRAIN on this login yet.</td></tr>`;
         foot.textContent = "Live Kalshi + NWS + METAR. Seed " + (j.seed || 20) + ".";
       } catch (e) {
         foot.textContent = "Status fetch failed: " + e;
@@ -234,11 +267,12 @@
         const s = await (await fetch("/api/scan", { cache: "no-store" })).json();
         if (!s.live) {
           meta.textContent = "no tape yet";
-          body.innerHTML = `<tr><td colspan="5">Waiting on the bot to post a clock. After the next 7:00 / 16:00 pull, or run python -m kxrain push-scan.</td></tr>`;
+          body.innerHTML = `<tr><td colspan="5">Waiting on the next 7:01 / 16:01 post. The VM still returns github_401 until SCAN_GITHUB_TOKEN can write this repo.</td></tr>`;
           return;
         }
         const when = s.clock || "clock";
-        meta.textContent = `${when} · ${s.screened || 0} screened · ${s.entered || 0} entered`;
+        const stamped = etStamp(s.createdAt);
+        meta.textContent = [when, stamped, s.event, (s.screened || 0) + " screened", (s.entered || 0) + " entered"].filter(Boolean).join(" · ");
         body.innerHTML = (s.cities || []).map((c) => `<tr>
           <td class="city">${c.city}</td>
           <td class="num">${c.pop == null ? "—" : Math.round(c.pop) + "%"}</td>
