@@ -2,16 +2,13 @@ const crypto = require("crypto");
 
 const CITIES = {
   NYC:  { name: "New York City", icao: "KNYC", tz: "America/New_York", lat: 40.7789, lon: -73.9692 },
-  EWR:  { name: "Newark", icao: "KEWR", tz: "America/New_York", lat: 40.6895, lon: -74.1745 },
-  TTN:  { name: "Trenton", icao: "KTTN", tz: "America/New_York", lat: 40.2767, lon: -74.8133 },
   PHIL: { name: "Philadelphia", icao: "KPHL", tz: "America/New_York", lat: 39.8719, lon: -75.2411 },
   DC:   { name: "Washington DC", icao: "KDCA", tz: "America/New_York", lat: 38.8512, lon: -77.0402 },
   BOS:  { name: "Boston", icao: "KBOS", tz: "America/New_York", lat: 42.3656, lon: -71.0096 },
-  ATL:  { name: "Atlanta", icao: "KATL", tz: "America/New_York", lat: 33.6407, lon: -84.4277 },
   MIA:  { name: "Miami", icao: "KMIA", tz: "America/New_York", lat: 25.7959, lon: -80.287 },
-  NOLA: { name: "New Orleans", icao: "KMSY", tz: "America/New_York", lat: 29.9934, lon: -90.258 },
   CHI:  { name: "Chicago", icao: "KORD", tz: "America/Chicago", lat: 41.9742, lon: -87.9073 },
   MIN:  { name: "Minneapolis", icao: "KMSP", tz: "America/Chicago", lat: 44.8848, lon: -93.2223 },
+  NOLA: { name: "New Orleans", icao: "KMSY", tz: "America/New_York", lat: 29.9934, lon: -90.258 },
   DEN:  { name: "Denver", icao: "KDEN", tz: "America/Denver", lat: 39.8561, lon: -104.6737 },
   OKC:  { name: "Oklahoma City", icao: "KOKC", tz: "America/Chicago", lat: 35.3931, lon: -97.6007 },
   DAL:  { name: "Dallas", icao: "KDFW", tz: "America/Chicago", lat: 32.8998, lon: -97.0403 },
@@ -21,12 +18,11 @@ const CITIES = {
   PHX:  { name: "Phoenix", icao: "KPHX", tz: "America/Phoenix", lat: 33.4373, lon: -112.0078 },
   LV:   { name: "Las Vegas", icao: "KLAS", tz: "America/Los_Angeles", lat: 36.084, lon: -115.1537 },
   LAX:  { name: "Los Angeles", icao: "KLAX", tz: "America/Los_Angeles", lat: 33.9425, lon: -118.4081 },
-  SFO:  { name: "San Francisco", icao: "KSFO", tz: "America/Los_Angeles", lat: 37.6213, lon: -122.379 },
   SEA:  { name: "Seattle", icao: "KSEA", tz: "America/Los_Angeles", lat: 47.4502, lon: -122.3088 }
 };
 
 const BASE = (process.env.KALSHI_BASE_URL || "https://external-api.kalshi.com/trade-api/v2").replace(/\/$/, "");
-const SEED = Number(process.env.SEED_DOLLARS || "20");
+const SEED = Number(process.env.SEED_DOLLARS || "99.29");
 const UA = process.env.NWS_USER_AGENT || "ProjectSeaOtter/1.0 (dashboard@local)";
 
 function pem() {
@@ -76,6 +72,15 @@ function num(v) {
   if (v == null || v === "") return 0;
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+function eventDate(ticker) {
+  const m = String(ticker || "").match(/-(\d{2})([A-Z]{3})(\d{2})-/);
+  if (!m) return null;
+  const months = { JAN:"01", FEB:"02", MAR:"03", APR:"04", MAY:"05", JUN:"06", JUL:"07", AUG:"08", SEP:"09", OCT:"10", NOV:"11", DEC:"12" };
+  const yy = m[1], mm = months[m[2]], dd = m[3];
+  if (!mm) return null;
+  return `20${yy}-${mm}-${dd}`;
 }
 
 async function hourlyPop(city) {
@@ -149,18 +154,39 @@ module.exports = async function handler(req, res) {
     const cash = bal.balance_dollars != null ? num(bal.balance_dollars) : num(bal.balance) / 100;
     const rows = pos.market_positions || pos.positions || [];
     const openRaw = [];
+    const history = [];
     for (const p of rows) {
       const ticker = p.ticker || "";
       if (!String(ticker).toUpperCase().includes("RAIN") && !cityFromTicker(ticker)) continue;
       const contractsRaw = p.position_fp != null ? num(p.position_fp) : num(p.position);
-      if (!contractsRaw) continue;
       const city = cityFromTicker(ticker) || "UNK";
+      const realized = num(p.realized_pnl_dollars != null ? p.realized_pnl_dollars : p.realized_pnl);
+      const fees = num(p.fees_paid_dollars != null ? p.fees_paid_dollars : p.fees_paid);
+      const traded = num(p.total_traded_dollars != null ? p.total_traded_dollars : p.total_traded);
+      const updated = p.last_updated_ts || p.last_updated || null;
+      if (!contractsRaw) {
+        if (traded || realized) {
+          history.push({
+            city,
+            name: (CITIES[city] || {}).name || city,
+            ticker,
+            date: eventDate(ticker),
+            settledAt: updated,
+            side: "NO",
+            realized: Number(realized.toFixed(2)),
+            fees: Number(fees.toFixed(2)),
+            traded: Number(traded.toFixed(2))
+          });
+        }
+        continue;
+      }
       const side = contractsRaw < 0 ? "NO" : "YES";
       const contracts = Math.abs(contractsRaw);
       const exposure = num(p.market_exposure_dollars != null ? p.market_exposure_dollars : p.market_exposure);
       const entry = contracts ? Math.abs(exposure) / contracts : 0;
       openRaw.push({ ticker, city, side, contracts, exposure: Math.abs(exposure), entry });
     }
+    history.sort((a, b) => String(b.date || b.settledAt || "").localeCompare(String(a.date || a.settledAt || "")));
 
     const open = [];
     let openMark = 0;
@@ -204,6 +230,7 @@ module.exports = async function handler(req, res) {
       sinceSeed: Number((portfolio - SEED).toFixed(2)),
       weekPnl: null,
       open,
+      history,
       health: {
         local: null,
         gcp: null,
