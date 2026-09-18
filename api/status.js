@@ -100,23 +100,51 @@ function inThisMonth(dateStr, iso) {
   return false;
 }
 
-function settlementPnl(s) {
-  const result = String(s.market_result || "").toLowerCase();
-  const yesN = num(s.yes_count_fp);
-  const noN = num(s.no_count_fp);
-  const yesC = num(s.yes_total_cost_dollars);
-  const noC = num(s.no_total_cost_dollars);
-  if (result === "no") {
-    if (noN > 0) return noN - noC;
-    if (yesN > 0) return -yesC;
+function ledger() {
+  return {
+    yesIn: 0, yesOut: 0, yesBuy: 0, yesSell: 0,
+    noIn: 0, noOut: 0, noBuy: 0, noSell: 0,
+    fees: 0
+  };
+}
+
+function applyFill(g, f) {
+  const count = num(f.count_fp != null ? f.count_fp : f.count);
+  const side = String(f.outcome_side || f.side || "").toLowerCase();
+  const action = String(f.action || "").toLowerCase();
+  const book = String(f.book_side || "").toLowerCase();
+  const yesPx = num(f.yes_price_dollars != null ? f.yes_price_dollars : (num(f.yes_price) / 100));
+  const noPx = num(f.no_price_dollars != null ? f.no_price_dollars : (num(f.no_price) / 100));
+  const fee = num(f.fee_cost != null ? f.fee_cost : (num(f.fee) / 100));
+  g.fees += fee;
+  let buy = action === "buy";
+  let sell = action === "sell";
+  let useYes = side === "yes";
+  if (!buy && !sell) {
+    if (book === "bid") buy = true;
+    if (book === "ask") sell = true;
   }
-  if (result === "yes") {
-    if (yesN > 0) return yesN - yesC;
-    if (noN > 0) return -noC;
+  if (!useYes && side !== "no") useYes = book !== "ask";
+  const px = useYes ? yesPx : (noPx || (yesPx ? 1 - yesPx : 0));
+  if (buy) {
+    if (useYes) { g.yesIn += count; g.yesBuy += count * px; }
+    else { g.noIn += count; g.noBuy += count * px; }
+  } else {
+    if (useYes) { g.yesOut += count; g.yesSell += count * px; }
+    else { g.noOut += count; g.noSell += count * px; }
   }
-  let payout = num(s.revenue);
-  if (Number.isInteger(payout) && Math.abs(payout) >= 20) payout /= 100;
-  return payout - yesC - noC;
+}
+
+function fillPnl(g, result) {
+  const yesLeft = Math.max(0, g.yesIn - g.yesOut);
+  const noLeft = Math.max(0, g.noIn - g.noOut);
+  const res = String(result || "").toLowerCase();
+  let settle = 0;
+  if (res === "yes") settle = yesLeft * 1;
+  else if (res === "no") settle = noLeft * 1;
+  const exits = g.yesSell + g.noSell + settle;
+  const entries = g.yesBuy + g.noBuy;
+  return exits - g.fees - entries;
 }
 
 async function hourlyPop(city) {
@@ -168,6 +196,8 @@ module.exports = async function handler(req, res) {
     return;
   }
   try {
+    const monthStart = new Date(`${monthKeyET()}-01T00:00:00-04:00`);
+    const minTs = Math.floor(monthStart.getTime() / 1000);
     const [bal, pos] = await Promise.all([
       kalshi("GET", "/portfolio/balance"),
       kalshi("GET", "/portfolio/positions?limit=200&count_filter=position")
@@ -183,6 +213,23 @@ module.exports = async function handler(req, res) {
         if (!cursor) break;
       }
     } catch {}
+    const fillsByTicker = {};
+    try {
+      let cursor = "";
+      for (let i = 0; i < 8; i++) {
+        const q = `&min_ts=${minTs}&limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+        const f = await kalshi("GET", `/portfolio/fills?${q.slice(1)}`);
+        for (const fill of f.fills || []) {
+          const ticker = fill.ticker || fill.market_ticker || "";
+          if (!String(ticker).toUpperCase().includes("RAIN")) continue;
+          if (!fillsByTicker[ticker]) fillsByTicker[ticker] = ledger();
+          applyFill(fillsByTicker[ticker], fill);
+        }
+        cursor = f.cursor || "";
+        if (!cursor) break;
+      }
+    } catch {}
+
     const cash = bal.balance_dollars != null ? num(bal.balance_dollars) : num(bal.balance) / 100;
     const rows = pos.market_positions || pos.positions || [];
     const openRaw = [];
@@ -216,21 +263,24 @@ module.exports = async function handler(req, res) {
       const updated = s.settled_time || null;
       if (!inThisMonth(date, updated)) continue;
       const city = cityFromTicker(ticker) || "UNK";
+      const g = fillsByTicker[ticker] || ledger();
+      const result = String(s.market_result || "").toLowerCase();
       const noN = num(s.no_count_fp);
       const yesN = num(s.yes_count_fp);
       byTicker[ticker] = {
         city, name: (CITIES[city] || {}).name || city, ticker, date,
         settledAt: updated,
         side: noN >= yesN ? "NO" : "YES",
-        result: String(s.market_result || "").toUpperCase(),
+        result: result.toUpperCase(),
         status: "CLOSED",
-        realized: Number(settlementPnl(s).toFixed(2)),
-        fees: Number(num(s.fee_cost).toFixed(2)),
-        traded: Number((num(s.yes_total_cost_dollars) + num(s.no_total_cost_dollars)).toFixed(2))
+        realized: Number(fillPnl(g, result).toFixed(2)),
+        fees: Number(g.fees.toFixed(2)),
+        traded: Number((g.yesBuy + g.noBuy).toFixed(2))
       };
     }
 
     const monthRows = Object.values(byTicker).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const realizedSum = monthRows.filter((r) => r.status === "CLOSED").reduce((a, r) => a + num(r.realized), 0);
 
     const open = [];
     let openMark = 0;
@@ -257,7 +307,6 @@ module.exports = async function handler(req, res) {
     }
 
     const portfolio = cash + openMark;
-    const bookPnl = Number((portfolio - SEED).toFixed(2));
     res.status(200).json({
       live: true,
       asOf: new Date().toISOString(),
@@ -265,8 +314,8 @@ module.exports = async function handler(req, res) {
       cash: Number(cash.toFixed(2)),
       openMark: Number(openMark.toFixed(2)),
       portfolio: Number(portfolio.toFixed(2)),
-      sinceSeed: bookPnl,
-      weekPnl: bookPnl,
+      sinceSeed: Number((portfolio - SEED).toFixed(2)),
+      weekPnl: Number(realizedSum.toFixed(2)),
       open,
       history: monthRows,
       month: monthKeyET()
