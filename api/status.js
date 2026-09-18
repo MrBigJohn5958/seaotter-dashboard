@@ -2,6 +2,7 @@ const crypto = require("crypto");
 
 const CITIES = {
   NYC:  { name: "New York City", icao: "KNYC", tz: "America/New_York", lat: 40.7789, lon: -73.9692 },
+  TTN:  { name: "Trenton", icao: "KTTN", tz: "America/New_York", lat: 40.2767, lon: -74.8133 },
   PHIL: { name: "Philadelphia", icao: "KPHL", tz: "America/New_York", lat: 39.8719, lon: -75.2411 },
   DC:   { name: "Washington DC", icao: "KDCA", tz: "America/New_York", lat: 38.8512, lon: -77.0402 },
   BOS:  { name: "Boston", icao: "KBOS", tz: "America/New_York", lat: 42.3656, lon: -71.0096 },
@@ -62,7 +63,7 @@ function cityFromTicker(ticker) {
   const t = String(ticker || "").toUpperCase();
   const keys = Object.keys(CITIES).sort((a, b) => b.length - a.length);
   for (const k of keys) {
-    if (t.endsWith("-" + k) || t.includes("-" + k + "-") || t.endsWith(k)) return k;
+    if (t.endsWith("-" + k)) return k;
   }
   return null;
 }
@@ -101,19 +102,21 @@ function inThisMonth(dateStr, iso) {
 
 function settlementPnl(s) {
   const result = String(s.market_result || "").toLowerCase();
-  const yesCost = num(s.yes_total_cost_dollars);
-  const noCost = num(s.no_total_cost_dollars);
-  const cost = result === "yes" ? yesCost : result === "no" ? noCost : (yesCost + noCost);
   const yesN = num(s.yes_count_fp);
   const noN = num(s.no_count_fp);
-  const held = result === "yes" ? yesN : result === "no" ? noN : Math.max(yesN, noN);
-  let payout = num(s.revenue);
-  if (Number.isInteger(payout) && payout >= 20) payout = payout / 100;
-  const expected = held * (s.value != null ? num(s.value) / 100 : 1);
-  if (expected && Math.abs(payout - expected) > Math.abs(num(s.revenue) / 100 - expected)) {
-    payout = num(s.revenue) / 100;
+  const yesC = num(s.yes_total_cost_dollars);
+  const noC = num(s.no_total_cost_dollars);
+  if (result === "no") {
+    if (noN > 0) return noN - noC;
+    if (yesN > 0) return -yesC;
   }
-  return payout - cost;
+  if (result === "yes") {
+    if (yesN > 0) return yesN - yesC;
+    if (noN > 0) return -noC;
+  }
+  let payout = num(s.revenue);
+  if (Number.isInteger(payout) && Math.abs(payout) >= 20) payout /= 100;
+  return payout - yesC - noC;
 }
 
 async function hourlyPop(city) {
@@ -167,7 +170,7 @@ module.exports = async function handler(req, res) {
   try {
     const [bal, pos] = await Promise.all([
       kalshi("GET", "/portfolio/balance"),
-      kalshi("GET", "/portfolio/positions?limit=200&count_filter=total_traded")
+      kalshi("GET", "/portfolio/positions?limit=200&count_filter=position")
     ]);
     let settlements = [];
     try {
@@ -184,58 +187,50 @@ module.exports = async function handler(req, res) {
     const rows = pos.market_positions || pos.positions || [];
     const openRaw = [];
     const byTicker = {};
+
     for (const p of rows) {
       const ticker = p.ticker || "";
-      if (!String(ticker).toUpperCase().includes("RAIN") && !cityFromTicker(ticker)) continue;
+      if (!String(ticker).toUpperCase().includes("RAIN")) continue;
       const contractsRaw = p.position_fp != null ? num(p.position_fp) : num(p.position);
+      if (!contractsRaw) continue;
       const city = cityFromTicker(ticker) || "UNK";
-      const realized = num(p.realized_pnl_dollars != null ? p.realized_pnl_dollars : (num(p.realized_pnl) / 100));
+      const side = contractsRaw < 0 ? "NO" : "YES";
+      const contracts = Math.abs(contractsRaw);
+      const exposure = num(p.market_exposure_dollars != null ? p.market_exposure_dollars : (num(p.market_exposure) / 100));
       const fees = num(p.fees_paid_dollars != null ? p.fees_paid_dollars : (num(p.fees_paid) / 100));
-      const traded = num(p.total_traded_dollars != null ? p.total_traded_dollars : (num(p.total_traded) / 100));
-      const updated = p.last_updated_ts || null;
       const date = eventDate(ticker);
-      if (contractsRaw) {
-        const side = contractsRaw < 0 ? "NO" : "YES";
-        const contracts = Math.abs(contractsRaw);
-        const exposure = num(p.market_exposure_dollars != null ? p.market_exposure_dollars : (num(p.market_exposure) / 100));
-        openRaw.push({ ticker, city, side, contracts, exposure: Math.abs(exposure), entry: contracts ? Math.abs(exposure) / contracts : 0 });
-        if (inThisMonth(date, updated)) {
-          byTicker[ticker] = {
-            city, name: (CITIES[city] || {}).name || city, ticker, date,
-            settledAt: updated, side, status: "OPEN", realized: null,
-            fees: Number(fees.toFixed(2)), traded: Number((traded || Math.abs(exposure)).toFixed(2))
-          };
-        }
-        continue;
-      }
-      if (inThisMonth(date, updated)) {
+      openRaw.push({ ticker, city, side, contracts, exposure: Math.abs(exposure), entry: contracts ? Math.abs(exposure) / contracts : 0 });
+      if (inThisMonth(date, p.last_updated_ts)) {
         byTicker[ticker] = {
           city, name: (CITIES[city] || {}).name || city, ticker, date,
-          settledAt: updated, side: "NO", status: "CLOSED",
-          realized: Number(realized.toFixed(2)), fees: Number(fees.toFixed(2)), traded: Number(traded.toFixed(2))
+          settledAt: p.last_updated_ts, side, status: "OPEN", realized: null,
+          fees: Number(fees.toFixed(2)), traded: Number(Math.abs(exposure).toFixed(2))
         };
       }
     }
+
     for (const s of settlements) {
       const ticker = s.ticker || s.market_ticker || "";
       if (!String(ticker).toUpperCase().includes("RAIN")) continue;
       const date = eventDate(ticker);
       const updated = s.settled_time || null;
       if (!inThisMonth(date, updated)) continue;
-      const existing = byTicker[ticker];
-      if (existing && existing.realized != null && existing.realized !== 0) continue;
       const city = cityFromTicker(ticker) || "UNK";
-      const noCount = num(s.no_count_fp);
-      const yesCount = num(s.yes_count_fp);
+      const noN = num(s.no_count_fp);
+      const yesN = num(s.yes_count_fp);
       byTicker[ticker] = {
         city, name: (CITIES[city] || {}).name || city, ticker, date,
-        settledAt: updated, side: noCount >= yesCount ? "NO" : "YES", status: "CLOSED",
+        settledAt: updated,
+        side: noN >= yesN ? "NO" : "YES",
+        result: String(s.market_result || "").toUpperCase(),
+        status: "CLOSED",
         realized: Number(settlementPnl(s).toFixed(2)),
         fees: Number(num(s.fee_cost).toFixed(2)),
         traded: Number((num(s.yes_total_cost_dollars) + num(s.no_total_cost_dollars)).toFixed(2))
       };
     }
-    const monthRows = Object.values(byTicker).sort((a, b) => String(b.date || b.settledAt || "").localeCompare(String(a.date || a.settledAt || "")));
+
+    const monthRows = Object.values(byTicker).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
     const monthClosedPnl = monthRows.filter((r) => r.status === "CLOSED").reduce((a, r) => a + num(r.realized), 0);
 
     const open = [];
