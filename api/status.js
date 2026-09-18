@@ -231,7 +231,6 @@ module.exports = async function handler(req, res) {
     }
 
     const monthRows = Object.values(byTicker).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-    const monthClosedPnl = monthRows.filter((r) => r.status === "CLOSED").reduce((a, r) => a + num(r.realized), 0);
 
     const open = [];
     let openMark = 0;
@@ -258,6 +257,7 @@ module.exports = async function handler(req, res) {
     }
 
     const portfolio = cash + openMark;
+    const bookPnl = Number((portfolio - SEED).toFixed(2));
     res.status(200).json({
       live: true,
       asOf: new Date().toISOString(),
@@ -265,8 +265,8 @@ module.exports = async function handler(req, res) {
       cash: Number(cash.toFixed(2)),
       openMark: Number(openMark.toFixed(2)),
       portfolio: Number(portfolio.toFixed(2)),
-      sinceSeed: Number((portfolio - SEED).toFixed(2)),
-      weekPnl: Number(monthClosedPnl.toFixed(2)),
+      sinceSeed: bookPnl,
+      weekPnl: bookPnl,
       open,
       history: monthRows,
       month: monthKeyET()
