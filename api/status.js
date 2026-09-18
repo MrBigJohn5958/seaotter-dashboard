@@ -26,8 +26,7 @@ const SEED = Number(process.env.SEED_DOLLARS || "99.29");
 const UA = process.env.NWS_USER_AGENT || "ProjectSeaOtter/1.0 (dashboard@local)";
 
 function pem() {
-  const raw = (process.env.KALSHI_PRIVATE_KEY || "").replace(/\\n/g, "\n").trim();
-  return raw;
+  return (process.env.KALSHI_PRIVATE_KEY || "").replace(/\\n/g, "\n").trim();
 }
 
 function sign(ts, method, path) {
@@ -74,24 +73,26 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function dollarsMaybeCents(v) {
+  const n = num(v);
+  if (Number.isInteger(n) && Math.abs(n) >= 50) return n / 100;
+  return n;
+}
+
 function eventDate(ticker) {
   const m = String(ticker || "").match(/-(\d{2})([A-Z]{3})(\d{2})-/);
   if (!m) return null;
   const months = { JAN:"01", FEB:"02", MAR:"03", APR:"04", MAY:"05", JUN:"06", JUL:"07", AUG:"08", SEP:"09", OCT:"10", NOV:"11", DEC:"12" };
-  const yy = m[1], mm = months[m[2]], dd = m[3];
+  const mm = months[m[2]];
   if (!mm) return null;
-  return `20${yy}-${mm}-${dd}`;
+  return `20${m[1]}-${mm}-${m[3]}`;
 }
 
 function monthKeyET(d) {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit"
+    timeZone: "America/New_York", year: "numeric", month: "2-digit"
   }).formatToParts(d || new Date());
-  const y = (parts.find((p) => p.type === "year") || {}).value;
-  const m = (parts.find((p) => p.type === "month") || {}).value;
-  return `${y}-${m}`;
+  return `${(parts.find((p) => p.type === "year") || {}).value}-${(parts.find((p) => p.type === "month") || {}).value}`;
 }
 
 function inThisMonth(dateStr, iso) {
@@ -104,6 +105,13 @@ function inThisMonth(dateStr, iso) {
   return false;
 }
 
+function settlementPnl(s) {
+  const payout = num(s.revenue) / 100;
+  const cost = num(s.yes_total_cost_dollars) + num(s.no_total_cost_dollars);
+  const fees = num(s.fee_cost);
+  return payout - cost - fees;
+}
+
 async function hourlyPop(city) {
   const meta = CITIES[city];
   if (!meta) return { pop: null, hourly: [] };
@@ -112,18 +120,13 @@ async function hourlyPop(city) {
       headers: { "User-Agent": UA, Accept: "application/geo+json" }
     });
     if (!pts.ok) return { pop: null, hourly: [] };
-    const props = (await pts.json()).properties || {};
-    const hourlyUrl = props.forecastHourly;
+    const hourlyUrl = ((await pts.json()).properties || {}).forecastHourly;
     if (!hourlyUrl) return { pop: null, hourly: [] };
     const fc = await fetch(hourlyUrl, { headers: { "User-Agent": UA, Accept: "application/geo+json" } });
     if (!fc.ok) return { pop: null, hourly: [] };
     const periods = ((await fc.json()).properties || {}).periods || [];
-    const hourly = periods.slice(0, 12).map((p) => {
-      const v = (p.probabilityOfPrecipitation || {}).value;
-      return v == null ? 0 : Number(v);
-    });
-    const pop = hourly.length ? Math.max(...hourly) : null;
-    return { pop, hourly };
+    const hourly = periods.slice(0, 12).map((p) => Number((p.probabilityOfPrecipitation || {}).value || 0));
+    return { pop: hourly.length ? Math.max(...hourly) : null, hourly };
   } catch {
     return { pop: null, hourly: [] };
   }
@@ -134,24 +137,18 @@ async function metar(icao) {
     const r = await fetch(`https://aviationweather.gov/api/data/metar?ids=${icao}&format=json&hours=3`, {
       headers: { "User-Agent": UA }
     });
-    if (!r.ok) return { wet: false, raw: "", hundredths: 0 };
+    if (!r.ok) return { wet: false };
     const payload = await r.json();
     const rows = Array.isArray(payload) ? payload : [payload];
-    let raw = "";
     let best = 0;
     for (const row of rows) {
       if (!row || typeof row !== "object") continue;
-      raw = String(row.rawOb || row.raw || raw);
+      const raw = String(row.rawOb || row.raw || "");
       for (const m of raw.matchAll(/P(\d{4})/g)) best = Math.max(best, parseInt(m[1], 10));
-      for (const key of ["pcp1hr", "pcp3hr", "pcp6hr", "precip_in"]) {
-        if (row[key] == null) continue;
-        const inches = Number(row[key]);
-        if (Number.isFinite(inches)) best = Math.max(best, Math.round(inches * 100));
-      }
     }
-    return { wet: best >= 1, raw, hundredths: best };
+    return { wet: best >= 1 };
   } catch {
-    return { wet: false, raw: "", hundredths: 0 };
+    return { wet: false };
   }
 }
 
@@ -160,85 +157,79 @@ module.exports = async function handler(req, res) {
   const keyId = (process.env.KALSHI_API_KEY_ID || "").trim();
   const key = pem();
   if (!keyId || !key) {
-    res.status(200).json({
-      live: false,
-      missing: ["KALSHI_API_KEY_ID", "KALSHI_PRIVATE_KEY"],
-      hint: "Add both on the Vercel project. PRIVATE_KEY is the PEM text, not a file path."
-    });
+    res.status(200).json({ live: false, hint: "Add Kalshi env vars on Vercel." });
     return;
   }
   try {
     const [bal, pos] = await Promise.all([
       kalshi("GET", "/portfolio/balance"),
-      kalshi("GET", "/portfolio/positions?limit=200&count_filter=position")
+      kalshi("GET", "/portfolio/positions?limit=200&count_filter=total_traded")
     ]);
-    let extra = [];
-    try {
-      const all = await kalshi("GET", "/portfolio/positions?limit=200");
-      extra = all.market_positions || all.positions || [];
-    } catch {}
     let settlements = [];
     try {
-      const s = await kalshi("GET", "/portfolio/settlements?limit=200");
-      settlements = s.settlements || [];
+      let cursor = "";
+      for (let i = 0; i < 5; i++) {
+        const q = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+        const s = await kalshi("GET", `/portfolio/settlements?limit=200${q}`);
+        settlements = settlements.concat(s.settlements || []);
+        cursor = s.cursor || "";
+        if (!cursor) break;
+      }
     } catch {}
     const cash = bal.balance_dollars != null ? num(bal.balance_dollars) : num(bal.balance) / 100;
-    const rows = (pos.market_positions || pos.positions || []).concat(extra);
-    const seen = new Set();
+    const rows = pos.market_positions || pos.positions || [];
     const openRaw = [];
-    const monthRows = [];
+    const byTicker = {};
     for (const p of rows) {
       const ticker = p.ticker || "";
-      if (seen.has(ticker)) continue;
-      seen.add(ticker);
       if (!String(ticker).toUpperCase().includes("RAIN") && !cityFromTicker(ticker)) continue;
       const contractsRaw = p.position_fp != null ? num(p.position_fp) : num(p.position);
       const city = cityFromTicker(ticker) || "UNK";
-      const realized = num(p.realized_pnl_dollars != null ? p.realized_pnl_dollars : p.realized_pnl);
-      const fees = num(p.fees_paid_dollars != null ? p.fees_paid_dollars : p.fees_paid);
-      const traded = num(p.total_traded_dollars != null ? p.total_traded_dollars : p.total_traded);
-      const updated = p.last_updated_ts || p.last_updated || null;
+      const realized = dollarsMaybeCents(p.realized_pnl_dollars != null ? p.realized_pnl_dollars : p.realized_pnl);
+      const fees = dollarsMaybeCents(p.fees_paid_dollars != null ? p.fees_paid_dollars : p.fees_paid);
+      const traded = dollarsMaybeCents(p.total_traded_dollars != null ? p.total_traded_dollars : p.total_traded);
+      const updated = p.last_updated_ts || null;
       const date = eventDate(ticker);
       if (contractsRaw) {
         const side = contractsRaw < 0 ? "NO" : "YES";
         const contracts = Math.abs(contractsRaw);
-        const exposure = num(p.market_exposure_dollars != null ? p.market_exposure_dollars : p.market_exposure);
-        const entry = contracts ? Math.abs(exposure) / contracts : 0;
-        openRaw.push({ ticker, city, side, contracts, exposure: Math.abs(exposure), entry });
+        const exposure = dollarsMaybeCents(p.market_exposure_dollars != null ? p.market_exposure_dollars : p.market_exposure);
+        openRaw.push({ ticker, city, side, contracts, exposure: Math.abs(exposure), entry: contracts ? Math.abs(exposure) / contracts : 0 });
         if (inThisMonth(date, updated)) {
-          monthRows.push({
+          byTicker[ticker] = {
             city, name: (CITIES[city] || {}).name || city, ticker, date,
-            settledAt: updated, side, status: "OPEN",
-            realized: null, fees: Number(fees.toFixed(2)), traded: Number((traded || Math.abs(exposure)).toFixed(2))
-          });
+            settledAt: updated, side, status: "OPEN", realized: null,
+            fees: Number(fees.toFixed(2)), traded: Number((traded || Math.abs(exposure)).toFixed(2))
+          };
         }
         continue;
       }
-      if ((traded || realized) && inThisMonth(date, updated)) {
-        monthRows.push({
+      if (inThisMonth(date, updated) && (traded || realized)) {
+        byTicker[ticker] = {
           city, name: (CITIES[city] || {}).name || city, ticker, date,
           settledAt: updated, side: "NO", status: "CLOSED",
           realized: Number(realized.toFixed(2)), fees: Number(fees.toFixed(2)), traded: Number(traded.toFixed(2))
-        });
+        };
       }
     }
     for (const s of settlements) {
       const ticker = s.ticker || s.market_ticker || "";
       if (!String(ticker).toUpperCase().includes("RAIN")) continue;
       const date = eventDate(ticker);
-      const updated = s.settled_time || s.updated_ts || null;
+      const updated = s.settled_time || null;
       if (!inThisMonth(date, updated)) continue;
-      if (monthRows.some((r) => r.ticker === ticker && r.status === "CLOSED")) continue;
       const city = cityFromTicker(ticker) || "UNK";
-      monthRows.push({
+      const noCount = num(s.no_count_fp);
+      const yesCount = num(s.yes_count_fp);
+      byTicker[ticker] = {
         city, name: (CITIES[city] || {}).name || city, ticker, date,
-        settledAt: updated, side: String(s.side || "NO").toUpperCase(), status: "CLOSED",
-        realized: Number(num(s.revenue || s.yes_total_cost || s.no_total_cost || 0).toFixed(2)),
-        fees: Number(num(s.fee_cost || 0).toFixed(2)),
-        traded: Number(num(s.yes_total_cost || s.no_total_cost || 0).toFixed(2))
-      });
+        settledAt: updated, side: noCount >= yesCount ? "NO" : "YES", status: "CLOSED",
+        realized: Number(settlementPnl(s).toFixed(2)),
+        fees: Number(num(s.fee_cost).toFixed(2)),
+        traded: Number((num(s.yes_total_cost_dollars) + num(s.no_total_cost_dollars)).toFixed(2))
+      };
     }
-    monthRows.sort((a, b) => String(b.date || b.settledAt || "").localeCompare(String(a.date || a.settledAt || "")));
+    const monthRows = Object.values(byTicker).sort((a, b) => String(b.date || b.settledAt || "").localeCompare(String(a.date || a.settledAt || "")));
 
     const open = [];
     let openMark = 0;
@@ -256,18 +247,11 @@ module.exports = async function handler(req, res) {
       const cashUsed = row.exposure || row.contracts * row.entry;
       openMark += row.contracts * mark;
       open.push({
-        city: row.city,
-        name: meta.name || row.city,
-        station: meta.icao || "",
-        ticker: row.ticker,
-        side: row.side,
-        entry: Number(row.entry.toFixed(2)),
-        mark: Number(mark.toFixed(2)),
-        contracts: row.contracts,
-        cash: Number(cashUsed.toFixed(2)),
-        pop: pop.pop,
-        popHourly: pop.hourly,
-        metar: wx.wet ? "WET" : "DRY"
+        city: row.city, name: meta.name || row.city, station: meta.icao || "",
+        ticker: row.ticker, side: row.side,
+        entry: Number(row.entry.toFixed(2)), mark: Number(mark.toFixed(2)),
+        contracts: row.contracts, cash: Number(cashUsed.toFixed(2)),
+        pop: pop.pop, popHourly: pop.hourly, metar: wx.wet ? "WET" : "DRY"
       });
     }
 
@@ -280,16 +264,10 @@ module.exports = async function handler(req, res) {
       openMark: Number(openMark.toFixed(2)),
       portfolio: Number(portfolio.toFixed(2)),
       sinceSeed: Number((portfolio - SEED).toFixed(2)),
-      weekPnl: null,
+      weekPnl: monthRows.filter((r) => r.status === "CLOSED").reduce((a, r) => a + num(r.realized), 0),
       open,
       history: monthRows,
-      month: monthKeyET(),
-      health: {
-        local: null,
-        gcp: null,
-        feedAgeSec: 8,
-        kill: false
-      }
+      month: monthKeyET()
     });
   } catch (err) {
     res.status(200).json({ live: false, error: String(err.message || err) });
