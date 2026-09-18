@@ -83,6 +83,27 @@ function eventDate(ticker) {
   return `20${yy}-${mm}-${dd}`;
 }
 
+function monthKeyET(d) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit"
+  }).formatToParts(d || new Date());
+  const y = (parts.find((p) => p.type === "year") || {}).value;
+  const m = (parts.find((p) => p.type === "month") || {}).value;
+  return `${y}-${m}`;
+}
+
+function inThisMonth(dateStr, iso) {
+  const key = monthKeyET();
+  if (dateStr && dateStr.slice(0, 7) === key) return true;
+  if (iso) {
+    const d = new Date(iso);
+    if (!Number.isNaN(d.getTime()) && monthKeyET(d) === key) return true;
+  }
+  return false;
+}
+
 async function hourlyPop(city) {
   const meta = CITIES[city];
   if (!meta) return { pop: null, hourly: [] };
@@ -149,14 +170,27 @@ module.exports = async function handler(req, res) {
   try {
     const [bal, pos] = await Promise.all([
       kalshi("GET", "/portfolio/balance"),
-      kalshi("GET", "/portfolio/positions?limit=200")
+      kalshi("GET", "/portfolio/positions?limit=200&count_filter=position")
     ]);
+    let extra = [];
+    try {
+      const all = await kalshi("GET", "/portfolio/positions?limit=200");
+      extra = all.market_positions || all.positions || [];
+    } catch {}
+    let settlements = [];
+    try {
+      const s = await kalshi("GET", "/portfolio/settlements?limit=200");
+      settlements = s.settlements || [];
+    } catch {}
     const cash = bal.balance_dollars != null ? num(bal.balance_dollars) : num(bal.balance) / 100;
-    const rows = pos.market_positions || pos.positions || [];
+    const rows = (pos.market_positions || pos.positions || []).concat(extra);
+    const seen = new Set();
     const openRaw = [];
-    const history = [];
+    const monthRows = [];
     for (const p of rows) {
       const ticker = p.ticker || "";
+      if (seen.has(ticker)) continue;
+      seen.add(ticker);
       if (!String(ticker).toUpperCase().includes("RAIN") && !cityFromTicker(ticker)) continue;
       const contractsRaw = p.position_fp != null ? num(p.position_fp) : num(p.position);
       const city = cityFromTicker(ticker) || "UNK";
@@ -164,29 +198,47 @@ module.exports = async function handler(req, res) {
       const fees = num(p.fees_paid_dollars != null ? p.fees_paid_dollars : p.fees_paid);
       const traded = num(p.total_traded_dollars != null ? p.total_traded_dollars : p.total_traded);
       const updated = p.last_updated_ts || p.last_updated || null;
-      if (!contractsRaw) {
-        if (traded || realized) {
-          history.push({
-            city,
-            name: (CITIES[city] || {}).name || city,
-            ticker,
-            date: eventDate(ticker),
-            settledAt: updated,
-            side: "NO",
-            realized: Number(realized.toFixed(2)),
-            fees: Number(fees.toFixed(2)),
-            traded: Number(traded.toFixed(2))
+      const date = eventDate(ticker);
+      if (contractsRaw) {
+        const side = contractsRaw < 0 ? "NO" : "YES";
+        const contracts = Math.abs(contractsRaw);
+        const exposure = num(p.market_exposure_dollars != null ? p.market_exposure_dollars : p.market_exposure);
+        const entry = contracts ? Math.abs(exposure) / contracts : 0;
+        openRaw.push({ ticker, city, side, contracts, exposure: Math.abs(exposure), entry });
+        if (inThisMonth(date, updated)) {
+          monthRows.push({
+            city, name: (CITIES[city] || {}).name || city, ticker, date,
+            settledAt: updated, side, status: "OPEN",
+            realized: null, fees: Number(fees.toFixed(2)), traded: Number((traded || Math.abs(exposure)).toFixed(2))
           });
         }
         continue;
       }
-      const side = contractsRaw < 0 ? "NO" : "YES";
-      const contracts = Math.abs(contractsRaw);
-      const exposure = num(p.market_exposure_dollars != null ? p.market_exposure_dollars : p.market_exposure);
-      const entry = contracts ? Math.abs(exposure) / contracts : 0;
-      openRaw.push({ ticker, city, side, contracts, exposure: Math.abs(exposure), entry });
+      if ((traded || realized) && inThisMonth(date, updated)) {
+        monthRows.push({
+          city, name: (CITIES[city] || {}).name || city, ticker, date,
+          settledAt: updated, side: "NO", status: "CLOSED",
+          realized: Number(realized.toFixed(2)), fees: Number(fees.toFixed(2)), traded: Number(traded.toFixed(2))
+        });
+      }
     }
-    history.sort((a, b) => String(b.date || b.settledAt || "").localeCompare(String(a.date || a.settledAt || "")));
+    for (const s of settlements) {
+      const ticker = s.ticker || s.market_ticker || "";
+      if (!String(ticker).toUpperCase().includes("RAIN")) continue;
+      const date = eventDate(ticker);
+      const updated = s.settled_time || s.updated_ts || null;
+      if (!inThisMonth(date, updated)) continue;
+      if (monthRows.some((r) => r.ticker === ticker && r.status === "CLOSED")) continue;
+      const city = cityFromTicker(ticker) || "UNK";
+      monthRows.push({
+        city, name: (CITIES[city] || {}).name || city, ticker, date,
+        settledAt: updated, side: String(s.side || "NO").toUpperCase(), status: "CLOSED",
+        realized: Number(num(s.revenue || s.yes_total_cost || s.no_total_cost || 0).toFixed(2)),
+        fees: Number(num(s.fee_cost || 0).toFixed(2)),
+        traded: Number(num(s.yes_total_cost || s.no_total_cost || 0).toFixed(2))
+      });
+    }
+    monthRows.sort((a, b) => String(b.date || b.settledAt || "").localeCompare(String(a.date || a.settledAt || "")));
 
     const open = [];
     let openMark = 0;
@@ -230,7 +282,8 @@ module.exports = async function handler(req, res) {
       sinceSeed: Number((portfolio - SEED).toFixed(2)),
       weekPnl: null,
       open,
-      history,
+      history: monthRows,
+      month: monthKeyET(),
       health: {
         local: null,
         gcp: null,
