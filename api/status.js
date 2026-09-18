@@ -73,12 +73,6 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function dollarsMaybeCents(v) {
-  const n = num(v);
-  if (Number.isInteger(n) && Math.abs(n) >= 50) return n / 100;
-  return n;
-}
-
 function eventDate(ticker) {
   const m = String(ticker || "").match(/-(\d{2})([A-Z]{3})(\d{2})-/);
   if (!m) return null;
@@ -106,10 +100,20 @@ function inThisMonth(dateStr, iso) {
 }
 
 function settlementPnl(s) {
-  const payout = num(s.revenue) / 100;
-  const cost = num(s.yes_total_cost_dollars) + num(s.no_total_cost_dollars);
-  const fees = num(s.fee_cost);
-  return payout - cost - fees;
+  const result = String(s.market_result || "").toLowerCase();
+  const yesCost = num(s.yes_total_cost_dollars);
+  const noCost = num(s.no_total_cost_dollars);
+  const cost = result === "yes" ? yesCost : result === "no" ? noCost : (yesCost + noCost);
+  const yesN = num(s.yes_count_fp);
+  const noN = num(s.no_count_fp);
+  const held = result === "yes" ? yesN : result === "no" ? noN : Math.max(yesN, noN);
+  let payout = num(s.revenue);
+  if (Number.isInteger(payout) && payout >= 20) payout = payout / 100;
+  const expected = held * (s.value != null ? num(s.value) / 100 : 1);
+  if (expected && Math.abs(payout - expected) > Math.abs(num(s.revenue) / 100 - expected)) {
+    payout = num(s.revenue) / 100;
+  }
+  return payout - cost;
 }
 
 async function hourlyPop(city) {
@@ -185,15 +189,15 @@ module.exports = async function handler(req, res) {
       if (!String(ticker).toUpperCase().includes("RAIN") && !cityFromTicker(ticker)) continue;
       const contractsRaw = p.position_fp != null ? num(p.position_fp) : num(p.position);
       const city = cityFromTicker(ticker) || "UNK";
-      const realized = dollarsMaybeCents(p.realized_pnl_dollars != null ? p.realized_pnl_dollars : p.realized_pnl);
-      const fees = dollarsMaybeCents(p.fees_paid_dollars != null ? p.fees_paid_dollars : p.fees_paid);
-      const traded = dollarsMaybeCents(p.total_traded_dollars != null ? p.total_traded_dollars : p.total_traded);
+      const realized = num(p.realized_pnl_dollars != null ? p.realized_pnl_dollars : (num(p.realized_pnl) / 100));
+      const fees = num(p.fees_paid_dollars != null ? p.fees_paid_dollars : (num(p.fees_paid) / 100));
+      const traded = num(p.total_traded_dollars != null ? p.total_traded_dollars : (num(p.total_traded) / 100));
       const updated = p.last_updated_ts || null;
       const date = eventDate(ticker);
       if (contractsRaw) {
         const side = contractsRaw < 0 ? "NO" : "YES";
         const contracts = Math.abs(contractsRaw);
-        const exposure = dollarsMaybeCents(p.market_exposure_dollars != null ? p.market_exposure_dollars : p.market_exposure);
+        const exposure = num(p.market_exposure_dollars != null ? p.market_exposure_dollars : (num(p.market_exposure) / 100));
         openRaw.push({ ticker, city, side, contracts, exposure: Math.abs(exposure), entry: contracts ? Math.abs(exposure) / contracts : 0 });
         if (inThisMonth(date, updated)) {
           byTicker[ticker] = {
@@ -204,7 +208,7 @@ module.exports = async function handler(req, res) {
         }
         continue;
       }
-      if (inThisMonth(date, updated) && (traded || realized)) {
+      if (inThisMonth(date, updated)) {
         byTicker[ticker] = {
           city, name: (CITIES[city] || {}).name || city, ticker, date,
           settledAt: updated, side: "NO", status: "CLOSED",
@@ -218,6 +222,8 @@ module.exports = async function handler(req, res) {
       const date = eventDate(ticker);
       const updated = s.settled_time || null;
       if (!inThisMonth(date, updated)) continue;
+      const existing = byTicker[ticker];
+      if (existing && existing.realized != null && existing.realized !== 0) continue;
       const city = cityFromTicker(ticker) || "UNK";
       const noCount = num(s.no_count_fp);
       const yesCount = num(s.yes_count_fp);
@@ -230,6 +236,7 @@ module.exports = async function handler(req, res) {
       };
     }
     const monthRows = Object.values(byTicker).sort((a, b) => String(b.date || b.settledAt || "").localeCompare(String(a.date || a.settledAt || "")));
+    const monthClosedPnl = monthRows.filter((r) => r.status === "CLOSED").reduce((a, r) => a + num(r.realized), 0);
 
     const open = [];
     let openMark = 0;
@@ -264,7 +271,7 @@ module.exports = async function handler(req, res) {
       openMark: Number(openMark.toFixed(2)),
       portfolio: Number(portfolio.toFixed(2)),
       sinceSeed: Number((portfolio - SEED).toFixed(2)),
-      weekPnl: monthRows.filter((r) => r.status === "CLOSED").reduce((a, r) => a + num(r.realized), 0),
+      weekPnl: Number(monthClosedPnl.toFixed(2)),
       open,
       history: monthRows,
       month: monthKeyET()
