@@ -52,6 +52,28 @@ async function pages(path, key) {
   }
   return out;
 }
+function slimFill(f) {
+  return {
+    ts: f.created_time || f.ts,
+    ticker: f.ticker || f.market_ticker,
+    action: f.action || "",
+    side: f.outcome_side || f.side || "",
+    book: f.book_side || "",
+    count: num(f.count_fp != null ? f.count_fp : f.count),
+    yes: px(f.yes_price_dollars, f.yes_price),
+    no: px(f.no_price_dollars, f.no_price),
+    fee: px(f.fee_cost, f.fee),
+    taker: !!f.is_taker
+  };
+}
+function moneyFields(row) {
+  const out = { status: row.status || row.deposit_status || null, ts: row.created_time || row.finalized_time || row.ts || null };
+  for (const [k, v] of Object.entries(row)) {
+    if (/account|bank|routing|number|id|wire|address/i.test(k)) continue;
+    if (typeof v === "number" || (typeof v === "string" && /^-?\d+(\.\d+)?$/.test(v))) out[k] = v;
+  }
+  return out;
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
@@ -64,8 +86,6 @@ module.exports = async function handler(req, res) {
     const fills = await pages("/portfolio/fills?", "fills");
     const settlements = await pages("/portfolio/settlements?", "settlements");
     const positions = await pages("/portfolio/positions?count_filter=position&", "market_positions");
-    let deposits = [];
-    let withdrawals = [];
     const extra = {};
     for (const [name, path, key] of [
       ["deposits", "/portfolio/deposits?", "deposits"],
@@ -74,55 +94,37 @@ module.exports = async function handler(req, res) {
       try { extra[name] = await pages(path, key); }
       catch (e) { extra[name + "Error"] = String(e.message || e); }
     }
-    deposits = extra.deposits || [];
-    withdrawals = extra.withdrawals || [];
-    const rainFills = fills.filter((f) => String(f.ticker || f.market_ticker || "").toUpperCase().includes("RAIN"));
-    const slim = rainFills.map((f) => ({
-      ts: f.created_time || f.ts,
-      ticker: f.ticker || f.market_ticker,
-      action: f.action || "",
-      side: f.outcome_side || f.side || "",
-      book: f.book_side || "",
-      count: num(f.count_fp != null ? f.count_fp : f.count),
-      yes: px(f.yes_price_dollars, f.yes_price),
-      no: px(f.no_price_dollars, f.no_price),
-      fee: px(f.fee_cost, f.fee),
-      taker: !!f.is_taker
+    const slim = fills.map(slimFill);
+    const settle = settlements.map((s) => ({
+      ticker: s.ticker || s.market_ticker,
+      result: s.market_result,
+      settled: s.settled_time,
+      revenue: s.revenue,
+      revenueDollars: s.revenue_dollars,
+      yes: num(s.yes_count_fp != null ? s.yes_count_fp : s.yes_count),
+      no: num(s.no_count_fp != null ? s.no_count_fp : s.no_count),
+      yesCost: s.yes_total_cost_dollars != null ? s.yes_total_cost_dollars : s.yes_total_cost,
+      noCost: s.no_total_cost_dollars != null ? s.no_total_cost_dollars : s.no_total_cost,
+      fee: s.fee_cost != null ? s.fee_cost : s.fee,
+      value: s.value
     }));
-    const settle = settlements
-      .filter((s) => String(s.ticker || s.market_ticker || "").toUpperCase().includes("RAIN"))
-      .map((s) => ({
-        ticker: s.ticker || s.market_ticker,
-        result: s.market_result,
-        settled: s.settled_time,
-        revenue: px(s.revenue_dollars, s.revenue),
-        yes: num(s.yes_count_fp != null ? s.yes_count_fp : s.yes_count),
-        no: num(s.no_count_fp != null ? s.no_count_fp : s.no_count),
-        yesCost: px(s.yes_total_cost_dollars, s.yes_total_cost),
-        noCost: px(s.no_total_cost_dollars, s.no_total_cost),
-        fee: px(s.fee_cost, s.fee)
-      }));
-    const open = positions
-      .filter((p) => String(p.ticker || "").toUpperCase().includes("RAIN"))
-      .map((p) => ({
-        ticker: p.ticker,
-        position: num(p.position_fp != null ? p.position_fp : p.position),
-        exposure: px(p.market_exposure_dollars, p.market_exposure),
-        fees: px(p.fees_paid_dollars, p.fees_paid)
-      }));
+    const open = positions.map((p) => ({
+      ticker: p.ticker,
+      position: num(p.position_fp != null ? p.position_fp : p.position),
+      exposure: p.market_exposure_dollars != null ? p.market_exposure_dollars : p.market_exposure,
+      fees: p.fees_paid_dollars != null ? p.fees_paid_dollars : p.fees_paid,
+      realized: p.realized_pnl_dollars != null ? p.realized_pnl_dollars : p.realized_pnl
+    }));
     res.status(200).json({
       ok: true,
       asOf: new Date().toISOString(),
       cash: bal.balance_dollars != null ? num(bal.balance_dollars) : num(bal.balance) / 100,
-      fillCount: fills.length,
-      rainFillCount: slim.length,
-      settlementCount: settlements.length,
-      rainSettlementCount: settle.length,
+      portfolioValue: bal.portfolio_value,
       fills: slim,
       settlements: settle,
       open,
-      deposits: deposits.map((d) => ({ ts: d.created_time || d.ts, amount: px(d.amount_dollars, d.amount), status: d.status })),
-      withdrawals: withdrawals.map((d) => ({ ts: d.created_time || d.ts, amount: px(d.amount_dollars, d.amount), status: d.status })),
+      deposits: (extra.deposits || []).map(moneyFields),
+      withdrawals: (extra.withdrawals || []).map(moneyFields),
       depositError: extra.depositsError || null,
       withdrawalError: extra.withdrawalsError || null
     });
