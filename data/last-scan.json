@@ -51,7 +51,7 @@
       "cash": 0.0,
       "contracts": 0,
       "held": false,
-      "metar": "METAR KPHL 161754Z 22010KT 10SM OVC010 21/18 A2977 RMK AO2 SLP079 60000 T0211018",
+      "metar": "metar_timeout:ReadTimeout",
       "skip": "pop_100"
     },
     {
@@ -85,13 +85,13 @@
       "city": "NOLA",
       "ticker": "KXRAIN-26OCT16-NOLA",
       "pop": 6.0,
-      "yes_mid": 0.1,
-      "no_price": 0.91,
+      "yes_mid": 0.115,
+      "no_price": 0.9,
       "cash": 0.0,
       "contracts": 0,
       "held": false,
       "metar": "METAR KMSY 161753Z 36007KT 10SM FEW035 FEW130 FEW250 29/19 A3007 RMK AO2 SLP184 ",
-      "skip": "yes_0.10_out_of_band"
+      "skip": "yes_0.12_out_of_band"
     },
     {
       "clock": "16:01",
@@ -238,5 +238,5 @@
     }
   ],
   "clock": "16:01",
-  "created_at": "2026-10-16T20:01:33.209344+00:00"
+  "created_at": "2026-10-16T20:01:39.987795+00:00"
 }
