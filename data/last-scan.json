@@ -1,6 +1,6 @@
 {
   "event": "KXRAIN-26OCT18",
-  "equity": 1154.7652,
+  "equity": 1136.3497,
   "rows": [
     {
       "clock": "07:01",
@@ -33,16 +33,13 @@
       "city": "PHX",
       "ticker": "KXRAIN-26OCT18-PHX",
       "pop": 17.0,
-      "yes_mid": 0.3,
-      "no_price": 0.71,
-      "cash": 358.8,
-      "contracts": 505,
-      "held": false,
+      "yes_mid": 0.255,
+      "no_price": 0.76,
+      "cash": 0.0,
+      "contracts": 0,
+      "held": true,
       "metar": "METAR KPHX 180851Z 08007KT 10SM FEW120 SCT160 SCT200 21/03 A3004 RMK AO2 SLP159 ",
-      "skip": null,
-      "filled": 395,
-      "limit": 0.24,
-      "placed": "8188fc5a-25ed-4c86-a55a-749792aecf25"
+      "skip": "yes_0.26_out_of_band"
     },
     {
       "clock": "07:01",
@@ -145,7 +142,7 @@
       "cash": 0.0,
       "contracts": 0,
       "held": false,
-      "metar": "metar_timeout:ReadTimeout",
+      "metar": "METAR KLAX 180853Z 10008KT 10SM FEW070 FEW250 22/06 A2998",
       "skip": "yes_0.01_out_of_band"
     },
     {
@@ -241,5 +238,5 @@
     }
   ],
   "clock": "07:01",
-  "created_at": "2026-10-18T11:01:32.991424+00:00"
+  "created_at": "2026-10-18T11:01:37.765724+00:00"
 }
